@@ -1,0 +1,486 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>منظومة الرقابة على مخازن الأدوية - مستشفى سينا كلينك</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+</head>
+<body>
+
+    <!-- شاشة تسجيل الدخول -->
+    <div id="login-screen" class="login-wrapper">
+        <div class="login-card">
+            <div class="login-logo">SC</div>
+            <h2>مستشفى سينا كلينك — شرم الشيخ</h2>
+            <p class="login-sub">منظومة الرقابة السحابية على مخازن الأدوية والأقسام</p>
+            <div id="login-error" class="alert-box error hidden"></div>
+            <form id="login-form">
+                <div class="form-group" style="margin-bottom: 14px;">
+                    <label>البريد الإلكتروني الوظيفي</label>
+                    <input type="email" id="login-email" required placeholder="name@sinaiclinic.com">
+                </div>
+                <div class="form-group" style="margin-bottom: 18px;">
+                    <label>كلمة المرور</label>
+                    <input type="password" id="login-password" required placeholder="••••••••">
+                </div>
+                <button type="submit" class="btn btn-primary" style="width: 100%;" id="btn-login">🔐 تسجيل الدخول</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- واجهة المنظومة الرئيسية -->
+    <div id="app-screen" class="hidden">
+        <header class="topbar">
+            <div class="brand">
+                <div class="brand-badge">SC</div>
+                <div>
+                    <h1>مستشفى سينا كلينك — شرم الشيخ</h1>
+                    <p id="user-role-banner">منظومة الرقابة السحابية على مخازن الأدوية</p>
+                </div>
+            </div>
+            <div class="user-controls">
+                <span class="user-pill" id="current-user-name">مرحباً</span>
+                <button class="btn-top" onclick="openPasswordModal()">🔑 تغيير كلمة المرور</button>
+                <button class="btn-top danger" onclick="logoutUser()">🚪 خروج</button>
+            </div>
+        </header>
+
+        <nav class="nav-tabs" id="main-nav">
+            <button class="tab-btn active" data-tab="dashboard" data-roles="MANAGEMENT,PHARMACY_MANAGER">📊 لوحة الرقابة والتنبيهات</button>
+            <button class="tab-btn" data-tab="balances" data-roles="MANAGEMENT,PHARMACY_MANAGER,DEPARTMENT_STAFF">🏥 أرصدة المخازن والأقسام</button>
+            <button class="tab-btn" data-tab="patient-dispense" data-roles="MANAGEMENT,PHARMACY_MANAGER,DEPARTMENT_STAFF">💉 صرف الأدوية على المرضى</button>
+            <button class="tab-btn" data-tab="movements" data-roles="MANAGEMENT,PHARMACY_MANAGER,DEPARTMENT_STAFF">🔄 التحويلات والوارد والمرتجع</button>
+            <button class="tab-btn" data-tab="drugs" data-roles="MANAGEMENT,PHARMACY_MANAGER">💊 دليل الأصناف الدوائية</button>
+            <button class="tab-btn" data-tab="ledger" data-roles="MANAGEMENT,PHARMACY_MANAGER,DEPARTMENT_STAFF">📑 كارت الصنف وسجل الحركات</button>
+            <button class="tab-btn" data-tab="users" data-roles="MANAGEMENT">👥 إدارة المستخدمين والصلاحيات</button>
+        </nav>
+
+        <main class="container">
+            <div id="alert-box" class="alert-box hidden"></div>
+
+            <!-- 1. لوحة الرقابة والتنبيهات -->
+            <section id="tab-dashboard" class="tab-content active">
+                <div class="kpi-grid">
+                    <div class="kpi-card blue">
+                        <span class="kpi-title">إجمالي الأصناف المُكوّدة</span>
+                        <strong class="kpi-value" id="kpi-total-drugs">0</strong>
+                    </div>
+                    <div class="kpi-card green">
+                        <span class="kpi-title">أصناف متوفرة برصيد موجب</span>
+                        <strong class="kpi-value" id="kpi-active-stock">0</strong>
+                    </div>
+                    <div class="kpi-card orange">
+                        <span class="kpi-title">تنبيهات النواقص (حد الطلب)</span>
+                        <strong class="kpi-value" id="kpi-low-stock">0</strong>
+                    </div>
+                    <div class="kpi-card red">
+                        <span class="kpi-title">قريبة انتهاء الصلاحية (90 يوماً)</span>
+                        <strong class="kpi-value" id="kpi-expiring">0</strong>
+                    </div>
+                </div>
+
+                <div class="split-panels">
+                    <div class="card">
+                        <div class="card-header">
+                            <h3>⚠️ تنبيهات النواقص (أقل من أو يساوي حد الطلب)</h3>
+                        </div>
+                        <div class="table-wrap">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>كود الصنف</th>
+                                        <th>اسم الدواء</th>
+                                        <th>إجمالي الرصيد بالمستشفى</th>
+                                        <th>حد الطلب</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="low-stock-tbody"></tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-header">
+                            <h3>⏳ تنبيهات الصلاحية (خلال 90 يوماً أو منتهية)</h3>
+                        </div>
+                        <div class="table-wrap">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>المخزن / القسم</th>
+                                        <th>اسم الدواء</th>
+                                        <th>التشغيلة</th>
+                                        <th>تاريخ الصلاحية</th>
+                                        <th>الكمية</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="expiring-tbody"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 2. أرصدة المخازن والأقسام -->
+            <section id="tab-balances" class="tab-content">
+                <div class="card">
+                    <div class="card-header">
+                        <h3>🏥 كشف الأرصدة الفعلية حسب المخزن والتشغيلة</h3>
+                        <div class="header-actions">
+                            <select id="filter-balance-location"></select>
+                            <input type="text" id="search-balance-drug" placeholder="بحث باسم الدواء أو الكود...">
+                            <button class="btn btn-secondary" onclick="exportTableToExcel('balances-table', 'SinaClinic_Stock_Balances')">📥 تصدير Excel</button>
+                        </div>
+                    </div>
+                    <div class="table-wrap">
+                        <table id="balances-table">
+                            <thead>
+                                <tr>
+                                    <th>المخزن / القسم</th>
+                                    <th>كود الصنف</th>
+                                    <th>الاسم التجاري</th>
+                                    <th>الاسم العلمي</th>
+                                    <th>التركيز</th>
+                                    <th>رقم التشغيلة</th>
+                                    <th>تاريخ الصلاحية</th>
+                                    <th>الرصيد المتاح</th>
+                                    <th>الوحدة</th>
+                                </tr>
+                            </thead>
+                            <tbody id="balances-tbody"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 3. تبويب مستقل: صرف الأدوية على المرضى -->
+            <section id="tab-patient-dispense" class="tab-content">
+                <div class="card" style="margin-bottom: 20px;">
+                    <div class="card-header">
+                        <h3>💉 تسجيل صرف دواء لمريض من عهدة القسم</h3>
+                    </div>
+                    <form id="patient-dispense-form" class="form-grid">
+                        <div class="form-group">
+                            <label>القسم الصارف للعلاج *</label>
+                            <select id="disp-location" required></select>
+                        </div>
+                        <div class="form-group">
+                            <label>اسم المريض بالكامل *</label>
+                            <input type="text" id="disp-patient-name" placeholder="مثال: محمود أحمد علي" required>
+                        </div>
+                        <div class="form-group">
+                            <label>رقم ملف المريض / التذكرة *</label>
+                            <input type="text" id="disp-patient-id" placeholder="مثال: MRN-2026-412" required>
+                        </div>
+                        <div class="form-group">
+                            <label>الدواء المتاح في عهدة القسم *</label>
+                            <select id="disp-stock-item" required></select>
+                        </div>
+                        <div class="form-group">
+                            <label>الكمية المنصرفة للمريض *</label>
+                            <input type="number" id="disp-qty" step="0.01" min="0.01" placeholder="الكمية" required>
+                        </div>
+                        <div class="form-group">
+                            <label>ملاحظات الطبيب / الجرعة</label>
+                            <input type="text" id="disp-notes" placeholder="اختياري">
+                        </div>
+                        <div class="form-group full-width">
+                            <button type="submit" class="btn btn-primary" id="btn-submit-dispense">✅ تأكيد صرف الدواء للمريض وخصمه من عهدة القسم</button>
+                        </div>
+                    </form>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <h3>📋 سجل الأدوية المنصرفة للمرضى</h3>
+                        <button class="btn btn-secondary" onclick="exportTableToExcel('patient-usage-table', 'SinaClinic_Patient_Medications')">📥 تصدير Excel</button>
+                    </div>
+                    <div class="table-wrap">
+                        <table id="patient-usage-table">
+                            <thead>
+                                <tr>
+                                    <th>التاريخ والوقت</th>
+                                    <th>القسم</th>
+                                    <th>الدواء</th>
+                                    <th>التشغيلة</th>
+                                    <th>الكمية</th>
+                                    <th>بيانات المريض والملاحظات</th>
+                                </tr>
+                            </thead>
+                            <tbody id="patient-usage-tbody"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 4. التحويلات والوارد والمرتجع -->
+            <section id="tab-movements" class="tab-content">
+                <div class="card">
+                    <div class="card-header">
+                        <h3>🔄 تسجيل حركة مخزنية (وارد / تحويل للأقسام / مرتجع / تسوية)</h3>
+                    </div>
+                    <form id="movement-form" class="form-grid">
+                        <div class="form-group">
+                            <label>نوع الحركة *</label>
+                            <select id="mov-type" required></select>
+                        </div>
+
+                        <div class="form-group" id="group-from-loc">
+                            <label id="label-from-loc">المخزن / القسم المنصرف منه *</label>
+                            <select id="mov-from-loc"></select>
+                        </div>
+
+                        <div class="form-group" id="group-to-loc">
+                            <label id="label-to-loc">المخزن / القسم المستلم *</label>
+                            <select id="mov-to-loc"></select>
+                        </div>
+
+                        <div class="form-group">
+                            <label>الصنف الدوائي *</label>
+                            <select id="mov-drug" required></select>
+                        </div>
+
+                        <div class="form-group">
+                            <label>رقم التشغيلة (Batch Number) *</label>
+                            <input type="text" id="mov-batch" placeholder="مثال: B2026-01" required list="existing-batches">
+                            <datalist id="existing-batches"></datalist>
+                        </div>
+
+                        <div class="form-group" id="group-expiry">
+                            <label>تاريخ الصلاحية (للوارد الجديد)</label>
+                            <input type="date" id="mov-expiry">
+                        </div>
+
+                        <div class="form-group">
+                            <label>الكمية *</label>
+                            <input type="number" id="mov-qty" step="0.01" placeholder="أدخل الكمية" required>
+                        </div>
+
+                        <div class="form-group" id="group-cost">
+                            <label>تكلفة الوحدة (ج.م)</label>
+                            <input type="number" id="mov-cost" step="0.01" value="0">
+                        </div>
+
+                        <div class="form-group">
+                            <label>رقم الإذن / الفاتورة المرجعي</label>
+                            <input type="text" id="mov-ref" placeholder="اختياري - يولّد تلقائياً">
+                        </div>
+
+                        <div class="form-group full-width">
+                            <label>ملاحظات الحركة</label>
+                            <input type="text" id="mov-notes" placeholder="أي تفاصيل إضافية للرقابة والمراجعة...">
+                        </div>
+
+                        <div class="form-group full-width">
+                            <button type="submit" class="btn btn-primary" id="btn-submit-mov">✅ اعتماد وترحيل الحركة فوراً</button>
+                        </div>
+                    </form>
+                </div>
+            </section>
+
+            <!-- 5. دليل الأصناف الدوائية -->
+            <section id="tab-drugs" class="tab-content">
+                <div class="card">
+                    <div class="card-header">
+                        <h3>➕ تكويد صنف دوائي جديد</h3>
+                    </div>
+                    <form id="drug-form" class="form-grid">
+                        <div class="form-group">
+                            <label>كود الصنف (Drug Code) *</label>
+                            <input type="text" id="drug-code" placeholder="مثال: DRG-001" required>
+                        </div>
+                        <div class="form-group">
+                            <label>الاسم التجاري (Trade Name) *</label>
+                            <input type="text" id="drug-trade" placeholder="مثال: Augmentin 1g Tab" required>
+                        </div>
+                        <div class="form-group">
+                            <label>الاسم العلمي (Generic Name)</label>
+                            <input type="text" id="drug-generic" placeholder="مثال: Amoxicillin / Clavulanic Acid">
+                        </div>
+                        <div class="form-group">
+                            <label>التركيز (Strength)</label>
+                            <input type="text" id="drug-strength" placeholder="مثال: 1000 mg">
+                        </div>
+                        <div class="form-group">
+                            <label>الشكل الصيدلي</label>
+                            <select id="drug-form-type">
+                                <option value="Tablet">أقراص (Tablet)</option>
+                                <option value="Capsule">كبسولات (Capsule)</option>
+                                <option value="Vial">فيال (Vial)</option>
+                                <option value="Ampoule">أمبول (Ampoule)</option>
+                                <option value="Syrup">شراب (Syrup)</option>
+                                <option value="IV Fluid">محلول وريدي (IV Fluid)</option>
+                                <option value="Cream/Ointment">كريم / مرهم</option>
+                                <option value="Drops">قطرة</option>
+                                <option value="Medical Supply">مستلزم طبي</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>وحدة المخزون والصرف *</label>
+                            <select id="drug-unit">
+                                <option value="Box">علبة (Box)</option>
+                                <option value="Strip">شريط (Strip)</option>
+                                <option value="Vial">فيال (Vial)</option>
+                                <option value="Ampoule">أمبول (Ampoule)</option>
+                                <option value="Bottle">زجاجة (Bottle)</option>
+                                <option value="Piece">قطعة / قرص (Piece)</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>حد إعادة الطلب (Reorder Point)</label>
+                            <input type="number" id="drug-reorder" value="10" min="0">
+                        </div>
+                        <div class="form-group">
+                            <label>مراقب / جدول؟</label>
+                            <select id="drug-controlled">
+                                <option value="false">لا (دواء عادي)</option>
+                                <option value="true">نعم (دواء جدول / مراقب)</option>
+                            </select>
+                        </div>
+                        <div class="form-group full-width">
+                            <button type="submit" class="btn btn-primary">💾 حفظ الصنف في الدليل</button>
+                        </div>
+                    </form>
+                </div>
+
+                <div class="card" style="margin-top: 20px;">
+                    <div class="card-header">
+                        <h3>📋 قائمة الأصناف الدوائية المسجلة</h3>
+                        <input type="text" id="search-drugs-list" placeholder="بحث في دليل الأدوية...">
+                    </div>
+                    <div class="table-wrap">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>الكود</th>
+                                    <th>الاسم التجاري</th>
+                                    <th>الاسم العلمي</th>
+                                    <th>التركيز</th>
+                                    <th>الشكل</th>
+                                    <th>الوحدة</th>
+                                    <th>حد الطلب</th>
+                                    <th>الرقابة</th>
+                                </tr>
+                            </thead>
+                            <tbody id="drugs-tbody"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 6. كارت الصنف وسجل الحركات -->
+            <section id="tab-ledger" class="tab-content">
+                <div class="card">
+                    <div class="card-header">
+                        <h3>📑 دفتر الأستاذ لحركات الأدوية (Audit & Stock Card)</h3>
+                        <div class="header-actions">
+                            <select id="filter-ledger-location"></select>
+                            <select id="filter-ledger-drug">
+                                <option value="ALL">كل الأصناف الدوائية</option>
+                            </select>
+                            <button class="btn btn-secondary" onclick="exportTableToExcel('ledger-table', 'SinaClinic_Stock_Ledger')">📥 تصدير Excel</button>
+                        </div>
+                    </div>
+                    <div class="table-wrap">
+                        <table id="ledger-table">
+                            <thead>
+                                <tr>
+                                    <th>التاريخ والوقت</th>
+                                    <th>المخزن / القسم</th>
+                                    <th>اسم الدواء</th>
+                                    <th>التشغيلة</th>
+                                    <th>نوع الحركة</th>
+                                    <th>الكمية</th>
+                                    <th>المرجع</th>
+                                    <th>البيان / المريض / ملاحظات</th>
+                                </tr>
+                            </thead>
+                            <tbody id="ledger-tbody"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 7. تبويب إدارة المستخدمين والصلاحيات (يظهر للإدارة فقط) -->
+            <section id="tab-users" class="tab-content">
+                <div class="card" style="margin-bottom: 20px;">
+                    <div class="card-header">
+                        <h3>➕ إضافة مستخدم جديد وتحديد صلاحياته</h3>
+                    </div>
+                    <p style="font-size: 13px; color: #64748b; margin-bottom: 14px;">
+                        ملاحظة: يجب إنشاء البريد الإلكتروني وكلمة المرور أولاً في لوحة تحكم Supabase (Authentication -> Users)، ثم ربطه هنا بصلاحياته وقسمه.
+                    </p>
+                    <form id="user-form" class="form-grid">
+                        <div class="form-group">
+                            <label>الاسم بالكامل *</label>
+                            <input type="text" id="usr-name" placeholder="مثال: د. سارة محمود" required>
+                        </div>
+                        <div class="form-group">
+                            <label>البريد الإلكتروني *</label>
+                            <input type="email" id="usr-email" placeholder="sara@sinaiclinic.com" required>
+                        </div>
+                        <div class="form-group">
+                            <label>الدور الوظيفي (الصلاحية) *</label>
+                            <select id="usr-role" required>
+                                <option value="PHARMACY_MANAGER">مدير الصيدلية (المخزن الرئيسي والتحويلات)</option>
+                                <option value="DEPARTMENT_STAFF">مشرف / تمريض قسم فرعي (عهدة القسم وصرف المرضى)</option>
+                                <option value="MANAGEMENT">الإدارة العليا (صلاحية كاملة ورقابة شاملة)</option>
+                            </select>
+                        </div>
+                        <div class="form-group" id="group-usr-dept">
+                            <label>القسم التابع له (لمشرفي الأقسام فقط)</label>
+                            <select id="usr-dept"></select>
+                        </div>
+                        <div class="form-group full-width">
+                            <button type="submit" class="btn btn-primary">💾 حفظ صلاحيات المستخدم</button>
+                        </div>
+                    </form>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <h3>👥 قائمة مستخدمي المنظومة وصلاحياتهم</h3>
+                    </div>
+                    <div class="table-wrap">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>الاسم</th>
+                                    <th>البريد الإلكتروني</th>
+                                    <th>الصلاحية</th>
+                                    <th>القسم المخصص</th>
+                                    <th>الحالة</th>
+                                    <th>إجراء</th>
+                                </tr>
+                            </thead>
+                            <tbody id="users-tbody"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- نافذة تغيير كلمة المرور -->
+    <div id="password-modal" class="modal hidden">
+        <div class="modal-content">
+            <h3>🔑 تغيير كلمة المرور</h3>
+            <form id="password-form">
+                <div class="form-group" style="margin: 14px 0;">
+                    <label>كلمة المرور الجديدة (6 أحرف على الأقل)</label>
+                    <input type="password" id="new-password" minlength="6" required>
+                </div>
+                <div style="display: flex; gap: 10px; justify-content: flex-end;">
+                    <button type="button" class="btn btn-secondary" onclick="closePasswordModal()">إلغاء</button>
+                    <button type="submit" class="btn btn-primary">تحديث كلمة المرور</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
