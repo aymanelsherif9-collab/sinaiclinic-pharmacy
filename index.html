@@ -32,7 +32,7 @@
     </div>
 
     <!-- واجهة المنظومة الرئيسية -->
-    <div id="app-screen" class="hidden">
+    <div id="app-screen" class="hidden no-print">
         <header class="topbar">
             <div class="brand">
                 <div class="brand-badge">SC</div>
@@ -181,7 +181,7 @@
                                     <th>مُقدّم الطلب</th>
                                     <th>الحالة الحالية</th>
                                     <th>مسار الاعتمادات</th>
-                                    <th>الإجراء / المراجعة</th>
+                                    <th>الإجراء / الطباعة</th>
                                 </tr>
                             </thead>
                             <tbody id="requisitions-tbody"></tbody>
@@ -248,6 +248,7 @@
                                 <option value="PATIENT_USAGE">صرفيات المرضى بالأقسام</option>
                                 <option value="STAFF_USAGE">صرفيات العاملين من المخزن الرئيسي</option>
                             </select>
+                            <button class="btn btn-primary" onclick="printTableReport('patient-usage-table', 'سجل صرف الأدوية للمرضى والعاملين بالمستشفى', false)">🖨️ طباعة السجل</button>
                             <button class="btn btn-secondary" onclick="exportTableToExcel('patient-usage-table', 'SinaClinic_Dispense_Log')">📥 تصدير Excel</button>
                         </div>
                     </div>
@@ -275,10 +276,11 @@
             <section id="tab-balances" class="tab-content">
                 <div class="card">
                     <div class="card-header">
-                        <h3>🏥 كشف الأرصدة الفعلية حسب المخزن والتشغيلة</h3>
+                        <h3>🏥 كشف الأرصدة الفعلية والجرد حسب المخزن والتشغيلة</h3>
                         <div class="header-actions">
                             <select id="filter-balance-location"></select>
                             <input type="text" id="search-balance-drug" placeholder="بحث باسم الدواء أو الكود...">
+                            <button class="btn btn-primary" onclick="printInventorySheet()">🖨️ طباعة كشف الجرد الفعلي</button>
                             <button class="btn btn-secondary" onclick="exportTableToExcel('balances-table', 'SinaClinic_Stock_Balances')">📥 تصدير Excel</button>
                         </div>
                     </div>
@@ -293,7 +295,7 @@
                                     <th>التركيز</th>
                                     <th>رقم التشغيلة</th>
                                     <th>تاريخ الصلاحية</th>
-                                    <th>الرصيد المتاح</th>
+                                    <th>الرصيد الدفتري</th>
                                     <th>الوحدة</th>
                                 </tr>
                             </thead>
@@ -489,6 +491,7 @@
                             <select id="filter-ledger-drug">
                                 <option value="ALL">كل الأصناف الدوائية</option>
                             </select>
+                            <button class="btn btn-primary" onclick="printTableReport('ledger-table', 'كشف حركات الأدوية وكارت الصنف', false)">🖨️ طباعة كارت الصنف</button>
                             <button class="btn btn-secondary" onclick="exportTableToExcel('ledger-table', 'SinaClinic_Stock_Ledger')">📥 تصدير Excel</button>
                         </div>
                     </div>
@@ -573,11 +576,14 @@
     </div>
 
     <!-- نافذة مراجعة واعتماد وصرف الطلبية -->
-    <div id="req-modal" class="modal hidden">
+    <div id="req-modal" class="modal hidden no-print">
         <div class="modal-content modal-lg">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
                 <h3 id="req-modal-title">تفاصيل الطلبية</h3>
-                <button type="button" class="btn btn-secondary btn-sm" onclick="closeReqModal()">✖ إغلاق</button>
+                <div style="display:flex; gap:8px;">
+                    <button type="button" class="btn btn-secondary btn-sm" onclick="printRequisitionVoucher()">🖨️ طباعة الطلبية / إذن الصرف</button>
+                    <button type="button" class="btn btn-secondary btn-sm" onclick="closeReqModal()">✖ إغلاق</button>
+                </div>
             </div>
             <div id="req-modal-meta" style="font-size:13px; color:#475569; margin-bottom:14px; background:#f8fafc; padding:10px; border-radius:8px;"></div>
             <div class="table-wrap">
@@ -585,10 +591,12 @@
                     <thead>
                         <tr>
                             <th>الصنف الدوائي</th>
-                            <th>الكمية المطلوبة</th>
-                            <th>المتاح بالمخزن الرئيسي</th>
+                            <th>مطلوب القسم</th>
+                            <th>المتاح بالرئيسي</th>
+                            <th>تعديل رئيس التمريض</th>
+                            <th>اعتماد المدير الطبي</th>
                             <th>الكمية المعتمدة / المنصرفة</th>
-                            <th>رقم التشغيلة (عند الصرف)</th>
+                            <th>التشغيلة وسبب التعديل</th>
                         </tr>
                     </thead>
                     <tbody id="req-modal-tbody"></tbody>
@@ -599,7 +607,7 @@
     </div>
 
     <!-- نافذة تغيير كلمة المرور -->
-    <div id="password-modal" class="modal hidden">
+    <div id="password-modal" class="modal hidden no-print">
         <div class="modal-content">
             <h3>🔑 تغيير كلمة المرور</h3>
             <form id="password-form">
@@ -614,6 +622,9 @@
             </form>
         </div>
     </div>
+
+    <!-- منطقة الطباعة الرسمية بترويسة المستشفى (تظهر فقط عند الطباعة) -->
+    <div id="print-area" class="print-only"></div>
 
     <script src="app.js"></script>
 </body>
