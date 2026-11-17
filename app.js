@@ -253,6 +253,9 @@ function populateDropdowns() {
     updateMovementFormUI();
 }
 
+// ==========================================
+// 1. دورة طلبيات الأقسام وتعديل الكميات والطباعة
+// ==========================================
 function addReqItemRow() {
     const container = document.getElementById('req-items-container');
     const drugOpts = state.drugs.map(d => `<option value="${d.id}">${d.drug_code} - ${d.trade_name} (${d.strength || ''})</option>`).join('');
@@ -344,7 +347,10 @@ function renderRequisitions() {
                 <td>${r.requested_by || '-'}</td>
                 <td><span class="badge ${st.badge}">${st.text}</span></td>
                 <td style="font-size:12px; color:#475569;">${trail}</td>
-                <td><button class="btn btn-primary btn-sm" onclick="openReqModal('${r.id}')">🔍 فتح ومراجعة / اعتماد</button></td>
+                <td>
+                    <button class="btn btn-primary btn-sm" onclick="openReqModal('${r.id}')">🔍 فتح ومراجعة</button>
+                    <button class="btn btn-secondary btn-sm" onclick="printRequisitionById('${r.id}')">🖨️ طباعة</button>
+                </td>
             </tr>
         `;
     }).join('') || `<tr><td colspan="7">لا توجد طلبيات مسجلة حالياً</td></tr>`;
@@ -378,22 +384,29 @@ function openReqModal(reqId) {
         const totalMainAvail = mainBalRows.reduce((s, b) => s + Number(b.quantity_on_hand), 0);
 
         const batchSelectHtml = mainBalRows.length > 0
-            ? `<select class="modal-item-batch">${mainBalRows.map(b => `<option value="${b.batch_number}">${b.batch_number} (متاح: ${b.quantity_on_hand})</option>`).join('')}</select>`
-            : `<span class="badge badge-out">غير متوفر بالمخزن</span>`;
+            ? `<select class="modal-item-batch" style="margin-bottom:4px;">${mainBalRows.map(b => `<option value="${b.batch_number}">${b.batch_number} (متاح: ${b.quantity_on_hand})</option>`).join('')}</select>`
+            : `<span class="badge badge-out" style="display:block; margin-bottom:4px;">غير متوفر بالمخزن</span>`;
 
         const currentQtyVal = req.status === 'ISSUED' ? item.issued_qty : (item.approved_qty ?? item.requested_qty);
 
         return `
             <tr data-item-id="${item.id}" data-drug-id="${item.drug_id}" data-unit="${item.unit_name || ''}">
-                <td><strong>${drugMap[item.drug_id] || '-'}</strong> (${item.unit_name || ''})</td>
+                <td><strong>${drugMap[item.drug_id] || '-'}</strong><br><small style="color:#64748b;">الوحدة: ${item.unit_name || ''}</small></td>
                 <td>${item.requested_qty}</td>
                 <td><span class="badge ${totalMainAvail > 0 ? 'badge-in' : 'badge-out'}">${totalMainAvail}</span></td>
+                <td>${item.head_nurse_qty ?? '-'}</td>
+                <td>${item.medical_dir_qty ?? '-'}</td>
                 <td>
                     ${canEditQty
-                        ? `<input type="number" class="modal-item-qty" value="${currentQtyVal}" min="0" step="0.01" style="width:100px;">`
+                        ? `<input type="number" class="modal-item-qty" value="${currentQtyVal}" min="0" step="0.01" style="width:95px; font-weight:bold;">`
                         : `<strong>${currentQtyVal}</strong>`}
                 </td>
-                <td>${isPharmacyIssuing ? batchSelectHtml : (item.batch_number || '-')}</td>
+                <td>
+                    ${isPharmacyIssuing ? batchSelectHtml : (item.batch_number ? `تشغيلة: ${item.batch_number}<br>` : '')}
+                    ${canEditQty
+                        ? `<input type="text" class="modal-item-reason" value="${item.adjustment_reason || ''}" placeholder="سبب التعديل (اختياري)" style="width:160px; font-size:12px;">`
+                        : `<small style="color:#475569;">${item.adjustment_reason || '-'}</small>`}
+                </td>
             </tr>
         `;
     }).join('');
@@ -427,8 +440,20 @@ async function processReqApproval(nextStatus) {
     for (const tr of rows) {
         const itemId = tr.dataset.itemId;
         const qtyInput = tr.querySelector('.modal-item-qty');
+        const reasonInput = tr.querySelector('.modal-item-reason');
+
         if (qtyInput) {
-            await db.from('requisition_items').update({ approved_qty: Number(qtyInput.value) }).eq('id', itemId);
+            const newQty = Number(qtyInput.value);
+            const updateItem = {
+                approved_qty: newQty,
+                adjustment_reason: reasonInput ? reasonInput.value.trim() : null
+            };
+            if (nextStatus === 'PENDING_MEDICAL_DIR') {
+                updateItem.head_nurse_qty = newQty;
+            } else if (nextStatus === 'APPROVED_FOR_ISSUE') {
+                updateItem.medical_dir_qty = newQty;
+            }
+            await db.from('requisition_items').update(updateItem).eq('id', itemId);
         }
     }
 
@@ -444,7 +469,7 @@ async function processReqApproval(nextStatus) {
     const { error } = await db.from('department_requisitions').update(updatePayload).eq('id', activeReqId);
     if (error) showAlert('حدث خطأ: ' + error.message, 'error');
     else {
-        showAlert('✅ تم تحديث حالة الطلبية وحفظ الاعتماد بنجاح');
+        showAlert('✅ تم حفظ التعديلات والاعتماد بنجاح');
         closeReqModal();
         await loadAllData();
     }
@@ -460,6 +485,7 @@ async function issueApprovedRequisition() {
         const drugId = tr.dataset.drugId;
         const unitName = tr.dataset.unit;
         const qty = Number(tr.querySelector('.modal-item-qty').value);
+        const reason = tr.querySelector('.modal-item-reason')?.value.trim() || null;
         const batchSelect = tr.querySelector('.modal-item-batch');
 
         if (qty > 0) {
@@ -484,9 +510,18 @@ async function issueApprovedRequisition() {
             });
             if (error) return showAlert('⚠️ توقف الصرف: ' + error.message, 'error');
 
-            await db.from('requisition_items').update({ issued_qty: qty, batch_number: batchNo }).eq('id', itemId);
+            await db.from('requisition_items').update({
+                approved_qty: qty,
+                issued_qty: qty,
+                batch_number: batchNo,
+                adjustment_reason: reason
+            }).eq('id', itemId);
         } else {
-            await db.from('requisition_items').update({ issued_qty: 0 }).eq('id', itemId);
+            await db.from('requisition_items').update({
+                approved_qty: 0,
+                issued_qty: 0,
+                adjustment_reason: reason
+            }).eq('id', itemId);
         }
     }
 
@@ -501,6 +536,171 @@ async function issueApprovedRequisition() {
     await loadAllData();
 }
 
+// ==========================================
+// 2. دوال الطباعة الرسمية (الطلبيات، الجرد، التقارير)
+// ==========================================
+function printRequisitionVoucher() {
+    if (activeReqId) printRequisitionById(activeReqId);
+}
+
+function printRequisitionById(reqId) {
+    const req = state.requisitions.find(r => r.id === reqId);
+    if (!req) return;
+    const items = state.reqItems.filter(i => i.requisition_id === reqId);
+    const locMap = Object.fromEntries(state.locations.map(l => [l.id, l.name_ar]));
+    const drugMap = Object.fromEntries(state.drugs.map(d => [d.id, `${d.drug_code} - ${d.trade_name} (${d.strength || ''})`]));
+
+    const rowsHtml = items.map((item, idx) => `
+        <tr>
+            <td>${idx + 1}</td>
+            <td><strong>${drugMap[item.drug_id] || '-'}</strong></td>
+            <td>${item.unit_name || '-'}</td>
+            <td>${item.requested_qty}</td>
+            <td>${item.head_nurse_qty ?? '-'}</td>
+            <td>${item.medical_dir_qty ?? '-'}</td>
+            <td><strong>${req.status === 'ISSUED' ? item.issued_qty : (item.approved_qty ?? item.requested_qty)}</strong></td>
+            <td>${item.batch_number || '-'}</td>
+            <td>${item.adjustment_reason || '-'}</td>
+        </tr>
+    `).join('');
+
+    const printArea = document.getElementById('print-area');
+    printArea.innerHTML = `
+        <div class="print-header">
+            <div>
+                <h2>مستشفى سينا كلينك — شرم الشيخ</h2>
+                <p>إدارة الصيدليات والتموين الطبي | إذن طلب وصرف أدوية للأقسام</p>
+            </div>
+            <div style="text-align:left; font-size:12px;">
+                <strong>رقم الإذن: ${req.req_number}</strong><br>
+                تاريخ الطلبية: ${req.req_date}<br>
+                تاريخ الطباعة: ${new Date().toLocaleDateString('ar-EG')}
+            </div>
+        </div>
+        <div class="print-meta">
+            <strong>القسم الطالب:</strong> ${locMap[req.department_id] || '-'} &nbsp;|&nbsp;
+            <strong>مُقدّم الطلب:</strong> ${req.requested_by || '-'} &nbsp;|&nbsp;
+            <strong>حالة الطلبية:</strong> ${REQ_STATUS_LABELS[req.status]?.text || req.status}<br>
+            <strong>ملاحظات:</strong> ${req.notes || 'لا يوجد'}
+        </div>
+        <table class="print-table">
+            <thead>
+                <tr>
+                    <th>م</th>
+                    <th>الصنف الدوائي</th>
+                    <th>الوحدة</th>
+                    <th>مطلوب القسم</th>
+                    <th>تعديل رئيس التمريض</th>
+                    <th>اعتماد المدير الطبي</th>
+                    <th>الكمية المعتمدة / المنصرفة</th>
+                    <th>التشغيلة</th>
+                    <th>ملاحظات / سبب التعديل</th>
+                </tr>
+            </thead>
+            <tbody>${rowsHtml}</tbody>
+        </table>
+        <div class="print-signatures">
+            <div><strong>مُقدّم الطلب بالقسم</strong><br><small>${req.requested_by || ''}</small><div class="sig-box">التوقيع</div></div>
+            <div><strong>اعتماد رئيس التمريض</strong><br><small>${req.head_nurse_by || ''}</small><div class="sig-box">التوقيع</div></div>
+            <div><strong>اعتماد المدير الطبي</strong><br><small>${req.medical_dir_by || ''}</small><div class="sig-box">التوقيع</div></div>
+            <div><strong>صرف مدير الصيدلية</strong><br><small>${req.issued_by || ''}</small><div class="sig-box">التوقيع</div></div>
+            <div><strong>مستلم العهدة بالقسم</strong><br><small>الاسم / التاريخ</small><div class="sig-box">التوقيع</div></div>
+        </div>
+    `;
+    window.print();
+}
+
+function printInventorySheet() {
+    const locSelect = document.getElementById('filter-balance-location');
+    const selectedLocName = locSelect.options[locSelect.selectedIndex]?.text || 'جميع المخازن والأقسام';
+    const rows = Array.from(document.querySelectorAll('#balances-tbody tr'));
+
+    const bodyHtml = rows.map((tr, i) => {
+        const tds = Array.from(tr.querySelectorAll('td')).map(td => td.innerText);
+        if (tds.length < 9) return '';
+        return `
+            <tr>
+                <td>${i + 1}</td>
+                <td>${tds[0]}</td>
+                <td>${tds[1]}</td>
+                <td><strong>${tds[2]}</strong></td>
+                <td>${tds[5]}</td>
+                <td>${tds[6]}</td>
+                <td><strong>${tds[7]}</strong> ${tds[8]}</td>
+                <td style="width:90px;"></td>
+                <td style="width:90px;"></td>
+            </tr>
+        `;
+    }).join('');
+
+    const printArea = document.getElementById('print-area');
+    printArea.innerHTML = `
+        <div class="print-header">
+            <div>
+                <h2>مستشفى سينا كلينك — شرم الشيخ</h2>
+                <p>إدارة الرقابة والمراجعة | محضر جرد ومطابقة أرصدة الأدوية</p>
+            </div>
+            <div style="text-align:left; font-size:12px;">
+                <strong>نطاق الجرد: ${selectedLocName}</strong><br>
+                تاريخ الجرد: ${new Date().toLocaleDateString('ar-EG')}<br>
+                القائم بالطباعة: ${currentUserProfile.full_name}
+            </div>
+        </div>
+        <table class="print-table">
+            <thead>
+                <tr>
+                    <th>م</th>
+                    <th>المخزن / القسم</th>
+                    <th>الكود</th>
+                    <th>اسم الدواء</th>
+                    <th>التشغيلة</th>
+                    <th>الصلاحية</th>
+                    <th>الرصيد الدفتري</th>
+                    <th>الرصيد الفعلي</th>
+                    <th>الفرق (+/-)</th>
+                </tr>
+            </thead>
+            <tbody>${bodyHtml}</tbody>
+        </table>
+        <div class="print-signatures">
+            <div><strong>أمين المخزن / عهدة القسم</strong><div class="sig-box">التوقيع</div></div>
+            <div><strong>عضو لجنة الجرد (الصيدلة)</strong><div class="sig-box">التوقيع</div></div>
+            <div><strong>عضو لجنة الجرد (المالية/الرقابة)</strong><div class="sig-box">التوقيع</div></div>
+            <div><strong>اعتماد الإدارة</strong><div class="sig-box">التوقيع</div></div>
+        </div>
+    `;
+    window.print();
+}
+
+function printTableReport(tableId, reportTitle) {
+    const tableClone = document.getElementById(tableId).cloneNode(true);
+    tableClone.className = 'print-table';
+
+    const printArea = document.getElementById('print-area');
+    printArea.innerHTML = `
+        <div class="print-header">
+            <div>
+                <h2>مستشفى سينا كلينك — شرم الشيخ</h2>
+                <p>${reportTitle}</p>
+            </div>
+            <div style="text-align:left; font-size:12px;">
+                تاريخ الطباعة: ${new Date().toLocaleDateString('ar-EG')}<br>
+                المستخدم: ${currentUserProfile.full_name}
+            </div>
+        </div>
+        ${tableClone.outerHTML}
+        <div class="print-signatures">
+            <div><strong>إعداد</strong><div class="sig-box">التوقيع</div></div>
+            <div><strong>مراجعة مدير الصيدلية</strong><div class="sig-box">التوقيع</div></div>
+            <div><strong>اعتماد الإدارة</strong><div class="sig-box">التوقيع</div></div>
+        </div>
+    `;
+    window.print();
+}
+
+// ==========================================
+// 3. صرف الأدوية للمرضى والعاملين بالمستشفى
+// ==========================================
 function updateDispenseModeUI() {
     const mode = document.getElementById('disp-mode').value;
     const isDeptStaff = currentUserProfile.role_code === 'DEPARTMENT_STAFF';
@@ -642,6 +842,9 @@ function renderPatientDispenseTab() {
     `).join('') || `<tr><td colspan="8">لا توجد صرفيات مسجلة</td></tr>`;
 }
 
+// ==========================================
+// 4. استيراد الأدوية من Excel أو صفحة ويب
+// ==========================================
 function downloadDrugsExcelTemplate() {
     const sample = [
         { drug_code: 'DRG-101', trade_name: 'Augmentin 1g Tab', generic_name: 'Amoxicillin / Clavulanic Acid', strength: '1000 mg', dosage_form: 'Tablet', stock_unit: 'Box', reorder_point: 15, is_controlled: 'NO' },
@@ -739,6 +942,9 @@ async function bulkInsertDrugsFromObjects(rows) {
     }
 }
 
+// ==========================================
+// 5. باقي الشاشات (الوارد، الأرصدة، الدليل، السجل، المستخدمين)
+// ==========================================
 function updateMovementFormUI() {
     const type = document.getElementById('mov-type').value;
     const isDeptStaff = currentUserProfile.role_code === 'DEPARTMENT_STAFF';
